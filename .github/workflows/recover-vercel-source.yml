@@ -1,0 +1,137 @@
+name: Recover TaVi Esports source from Vercel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-vercel-source.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: recover-tavi-source
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      DEPLOYMENT_ID: dpl_AeSpcawkAsevneW6Yt5t9c8tPCCf
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Restore deployment source files without deleting repository files
+        shell: bash
+        run: |
+          test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN secret is missing"; exit 1; }
+          node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const token = process.env.VERCEL_TOKEN;
+          const deploymentId = process.env.DEPLOYMENT_ID;
+          const api = "https://api.vercel.com";
+
+          async function requestJson(url) {
+            for (let attempt = 1; attempt <= 4; attempt++) {
+              const response = await fetch(url, {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (response.ok) return response.json();
+              const body = await response.text();
+              if (attempt === 4 || ![429, 500, 502, 503, 504].includes(response.status)) {
+                throw new Error(`${response.status} ${response.statusText}: ${body.slice(0, 500)}`);
+              }
+              await new Promise(resolve => setTimeout(resolve, attempt * 1500));
+            }
+          }
+
+          function flatten(entries, parent = "") {
+            const files = [];
+            for (const entry of entries) {
+              const relativePath = parent ? `${parent}/${entry.name}` : entry.name;
+              if (entry.type === "directory") {
+                files.push(...flatten(entry.children || [], relativePath));
+              } else if (entry.type === "file" && entry.uid) {
+                files.push({ relativePath, uid: entry.uid, mode: entry.mode });
+              }
+            }
+            return files;
+          }
+
+          function safePath(relativePath) {
+            if (!relativePath || relativePath.includes("\0") || path.isAbsolute(relativePath)) return false;
+            const normalized = path.posix.normalize(relativePath);
+            return normalized !== ".." && !normalized.startsWith("../") && !normalized.startsWith(".git/");
+          }
+
+          (async () => {
+            const tree = await requestJson(`${api}/v6/deployments/${deploymentId}/files`);
+            const files = flatten(tree);
+            if (files.length < 20) {
+              throw new Error(`Expected a full source deployment, but API returned only ${files.length} files`);
+            }
+
+            let restored = 0;
+            let preserved = 0;
+            for (const file of files) {
+              if (!safePath(file.relativePath)) {
+                throw new Error(`Unsafe deployment path: ${file.relativePath}`);
+              }
+
+              if (file.relativePath === ".github/workflows/recover-vercel-source.yml" || fs.existsSync(file.relativePath)) {
+                console.log(`Preserved existing repository file: ${file.relativePath}`);
+                preserved++;
+                continue;
+              }
+
+              const url = `${api}/v8/deployments/${deploymentId}/files/${encodeURIComponent(file.uid)}?path=${encodeURIComponent(file.relativePath)}`;
+              const payload = await requestJson(url);
+              if (!payload || typeof payload.content !== "string") {
+                throw new Error(`No base64 content returned for ${file.relativePath}`);
+              }
+
+              fs.mkdirSync(path.dirname(file.relativePath), { recursive: true });
+              fs.writeFileSync(file.relativePath, Buffer.from(payload.content, "base64"));
+              if (file.mode && (file.mode & 0o111)) fs.chmodSync(file.relativePath, 0o755);
+              console.log(`Restored: ${file.relativePath}`);
+              restored++;
+            }
+
+            fs.writeFileSync(
+              ".vercel-source-recovery.json",
+              JSON.stringify({
+                deploymentId,
+                recoveredAt: new Date().toISOString(),
+                deploymentFileCount: files.length,
+                restoredFileCount: restored,
+                preservedExistingFileCount: preserved
+              }, null, 2) + "\n"
+            );
+            console.log(`Recovered ${restored} files; preserved ${preserved} existing files; deployment contained ${files.length} files.`);
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Commit recovered source to main
+        shell: bash
+        run: |
+          git config user.name "TaVi Source Recovery"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes were recovered."
+            exit 0
+          fi
+          git commit -m "Restore complete TaVi Esports source from Vercel [skip ci]"
+          git push origin HEAD:main
+          echo "Recovered source commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
