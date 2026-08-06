@@ -1,6 +1,7 @@
 name: Recover TaVi Esports source from Vercel
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
