@@ -1,2 +1,3 @@
 Authorized one-time recovery trigger for deployment dpl_AeSpcawkAsevneW6Yt5t9c8tPCCf.
 Retry after response-shape fix.
+Retry with Vercel data payload support.
