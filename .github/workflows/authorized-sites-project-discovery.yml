@@ -1,0 +1,144 @@
+name: Authorized Sites project discovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/authorized-sites-project-discovery.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: team_cuSrhEI7TKd7G2EhByPHohqI
+      VERCEL_DEPLOYMENT_ID: dpl_9ALTp7wnBoBneNMuN2ZTmscLV4f6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify authorized credential
+        shell: bash
+        run: test -n "$VERCEL_TOKEN"
+
+      - name: Discover only the public Sites reference
+        shell: python
+        run: |
+          import base64
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["VERCEL_TOKEN"]
+          team = os.environ["VERCEL_TEAM_ID"]
+          deployment = os.environ["VERCEL_DEPLOYMENT_ID"]
+          headers = {"Authorization": f"Bearer {token}"}
+
+          def api(path):
+              separator = "&" if "?" in path else "?"
+              request = urllib.request.Request(
+                  "https://api.vercel.com" + path + separator + urllib.parse.urlencode({"teamId": team}),
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          def flatten(nodes, prefix=""):
+              output = []
+              for node in nodes if isinstance(nodes, list) else []:
+                  name = node.get("name", "")
+                  current = f"{prefix}/{name}" if prefix else name
+                  if node.get("type") == "file" and node.get("uid"):
+                      output.append((current, node["uid"]))
+                  output.extend(flatten(node.get("children", []), current))
+              return output
+
+          tree = api(f"/v6/deployments/{deployment}/files")
+          files = flatten(tree)
+          allowed = re.compile(r"(?:^|\.)(?:js|mjs|cjs|json|ts|tsx|txt|html)$", re.I)
+          url_pattern = re.compile(r"https://[a-z0-9.-]+\.chatgpt\.site(?:/[^\"'\s\\]*)?", re.I)
+          id_pattern = re.compile(r"(?:project_id|projectId)[\"'\s:=]+([A-Za-z0-9_-]{16,})")
+          urls = set()
+          project_ids = set()
+          matched_paths = set()
+          total_bytes = 0
+
+          preferred = sorted(files, key=lambda item: (
+              0 if item[0].endswith(".openai/hosting.json") else
+              1 if "/server/" in item[0] or item[0].startswith("api/") else
+              2, item[0]
+          ))
+
+          for file_path, uid in preferred[:800]:
+              if not allowed.search(file_path):
+                  continue
+              try:
+                  payload = api(f"/v8/deployments/{deployment}/files/{uid}")
+                  raw = base64.b64decode(payload.get("content", ""), validate=False)
+              except Exception:
+                  continue
+              if len(raw) > 4_000_000 or total_bytes + len(raw) > 30_000_000:
+                  continue
+              total_bytes += len(raw)
+              text = raw.decode("utf-8", errors="ignore")
+              found_urls = url_pattern.findall(text)
+              found_ids = id_pattern.findall(text)
+              if file_path.endswith(".openai/hosting.json"):
+                  try:
+                      parsed = json.loads(text)
+                      if isinstance(parsed.get("project_id"), str):
+                          found_ids.append(parsed["project_id"])
+                  except Exception:
+                      pass
+              if found_urls or found_ids:
+                  matched_paths.add(file_path)
+                  urls.update(item.rstrip("/.,;)") for item in found_urls)
+                  project_ids.update(found_ids)
+
+          result = {
+              "sites_urls": sorted(urls),
+              "project_ids": sorted(project_ids),
+              "matched_paths": sorted(matched_paths),
+              "deployment_id": deployment,
+          }
+          with open("authorized-sites-discovery.json", "w", encoding="utf-8") as handle:
+              json.dump(result, handle, ensure_ascii=False, indent=2)
+          if not urls and not project_ids:
+              raise SystemExit(2)
+
+      - name: Upload private diagnostic result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authorized-sites-discovery
+          path: authorized-sites-discovery.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove temporary PR and branch
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          curl --fail --silent --show-error -o /dev/null \
+            -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER" \
+            -d '{"state":"closed"}'
+          encoded_ref=$(python -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["HEAD_REF"], safe=""))')
+          curl --fail --silent --show-error -o /dev/null \
+            -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/git/refs/heads/$encoded_ref"
