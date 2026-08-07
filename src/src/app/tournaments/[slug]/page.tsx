@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Eyebrow } from "@/components/ui";
+import { LargeTournamentView } from "@/components/large-tournament-view";
 import { formatKyivDate, tournaments } from "@/lib/data";
 
 type Props = { params: Promise<{ slug: string }> };
@@ -71,6 +72,7 @@ export default async function TournamentPage({ params }: Props) {
                 </span>
               </div>
             </article>
+            {tournament.largeFormat && <LargeTournamentView />}
           </div>
           <aside className="surface registration-panel">
             <span className="status status-registration">
@@ -89,7 +91,7 @@ export default async function TournamentPage({ params }: Props) {
                 <b style={{ width: `${(tournament.registered / tournament.slots) * 100}%` }} />
               </i>
             </div>
-            <Link className="button button-primary button-large" href="/register-team">
+            <Link className="button button-primary button-large" href={`/register-team?tournament=${tournament.id}`}>
               Подати заявку
             </Link>
             <Link className="button button-ghost" href="/rules">

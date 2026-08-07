@@ -49,6 +49,21 @@ export const tournaments: Tournament[] = [
     registered: 9,
     status: "upcoming",
     accent: "pink"
+  },
+  {
+    id: "t4",
+    slug: "tavi-major-5x5",
+    title: "TaVi Major 5×5",
+    game: "Mobile Legends: Bang Bang",
+    format: "5×5 · Кваліфікація · Групи · Плей-оф",
+    startsAt: "2026-09-05T18:00:00+03:00",
+    registrationEndsAt: "2026-09-01T23:59:00+03:00",
+    prize: "30 000 ₴ · 6 місць",
+    slots: 64,
+    registered: 48,
+    status: "registration",
+    accent: "violet",
+    largeFormat: true
   }
 ];
 
@@ -102,4 +117,3 @@ export function formatKyivDate(value: string, includeYear = false) {
     hour12: false
   }).format(new Date(value));
 }
-

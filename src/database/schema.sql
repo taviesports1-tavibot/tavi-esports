@@ -126,11 +126,22 @@ CREATE TABLE IF NOT EXISTS tournaments (
   status tournament_status NOT NULL DEFAULT 'draft',
   visibility text NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'unlisted', 'private')),
   stream_url text,
+  qualification_target integer NOT NULL DEFAULT 16 CHECK (qualification_target = 16),
+  group_count integer NOT NULL DEFAULT 4 CHECK (group_count = 4),
+  group_size integer NOT NULL DEFAULT 4 CHECK (group_size = 4),
+  playoff_slots integer NOT NULL DEFAULT 8 CHECK (playoff_slots = 8),
+  prize_places integer NOT NULL DEFAULT 6 CHECK (prize_places = 6),
   created_by uuid REFERENCES users(id),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CHECK (registration_ends_at <= starts_at)
 );
+
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS qualification_target integer NOT NULL DEFAULT 16;
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS group_count integer NOT NULL DEFAULT 4;
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS group_size integer NOT NULL DEFAULT 4;
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS playoff_slots integer NOT NULL DEFAULT 8;
+ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS prize_places integer NOT NULL DEFAULT 6;
 
 CREATE TABLE IF NOT EXISTS tournament_registrations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -161,10 +172,45 @@ CREATE TABLE IF NOT EXISTS brackets (
   UNIQUE (tournament_id, name)
 );
 
+CREATE TABLE IF NOT EXISTS tournament_stages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+  stage_type text NOT NULL CHECK (stage_type IN ('qualification', 'groups', 'playoff', 'placement')),
+  name text NOT NULL,
+  stage_order integer NOT NULL CHECK (stage_order > 0),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'live', 'completed')),
+  best_of integer NOT NULL DEFAULT 1 CHECK (best_of IN (1, 3, 5)),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tournament_id, stage_type)
+);
+
+CREATE TABLE IF NOT EXISTS tournament_groups (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+  stage_id uuid NOT NULL REFERENCES tournament_stages(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  group_order integer NOT NULL CHECK (group_order > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (tournament_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS tournament_group_members (
+  group_id uuid NOT NULL REFERENCES tournament_groups(id) ON DELETE CASCADE,
+  registration_id uuid NOT NULL REFERENCES tournament_registrations(id) ON DELETE CASCADE,
+  group_seed integer NOT NULL CHECK (group_seed BETWEEN 1 AND 4),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (group_id, registration_id),
+  UNIQUE (group_id, group_seed)
+);
+
 CREATE TABLE IF NOT EXISTS matches (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
   bracket_id uuid REFERENCES brackets(id) ON DELETE CASCADE,
+  stage_id uuid REFERENCES tournament_stages(id) ON DELETE CASCADE,
+  group_id uuid REFERENCES tournament_groups(id) ON DELETE CASCADE,
+  match_code text,
   round_number integer NOT NULL CHECK (round_number > 0),
   match_number integer NOT NULL CHECK (match_number > 0),
   best_of integer NOT NULL DEFAULT 3 CHECK (best_of IN (1, 3, 5, 7)),
@@ -179,9 +225,40 @@ CREATE TABLE IF NOT EXISTS matches (
   completed_at timestamptz,
   next_match_id uuid REFERENCES matches(id),
   next_match_slot smallint CHECK (next_match_slot IN (1, 2)),
+  loser_next_match_id uuid REFERENCES matches(id),
+  loser_next_match_slot smallint CHECK (loser_next_match_slot IN (1, 2)),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (bracket_id, round_number, match_number)
+);
+
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS stage_id uuid REFERENCES tournament_stages(id) ON DELETE CASCADE;
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS group_id uuid REFERENCES tournament_groups(id) ON DELETE CASCADE;
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS match_code text;
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS loser_next_match_id uuid REFERENCES matches(id);
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS loser_next_match_slot smallint;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_tournament_code
+  ON matches(tournament_id, match_code) WHERE match_code IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS tournament_stage_advancements (
+  stage_id uuid NOT NULL REFERENCES tournament_stages(id) ON DELETE CASCADE,
+  registration_id uuid NOT NULL REFERENCES tournament_registrations(id) ON DELETE CASCADE,
+  advancement_order integer NOT NULL CHECK (advancement_order > 0),
+  source_match_id uuid REFERENCES matches(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (stage_id, registration_id),
+  UNIQUE (stage_id, advancement_order)
+);
+
+CREATE TABLE IF NOT EXISTS tournament_placements (
+  tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+  place integer NOT NULL CHECK (place BETWEEN 1 AND 6),
+  registration_id uuid NOT NULL REFERENCES tournament_registrations(id) ON DELETE CASCADE,
+  source_match_id uuid REFERENCES matches(id) ON DELETE SET NULL,
+  awarded_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tournament_id, place),
+  UNIQUE (tournament_id, registration_id)
 );
 
 CREATE TABLE IF NOT EXISTS match_reports (
@@ -385,6 +462,8 @@ CREATE TABLE IF NOT EXISTS platform_settings (
 CREATE INDEX IF NOT EXISTS idx_tournaments_status_starts ON tournaments(status, starts_at);
 CREATE INDEX IF NOT EXISTS idx_registrations_tournament_status ON tournament_registrations(tournament_id, status);
 CREATE INDEX IF NOT EXISTS idx_matches_tournament_round ON matches(tournament_id, round_number, match_number);
+CREATE INDEX IF NOT EXISTS idx_matches_stage_status ON matches(stage_id, status, round_number, match_number);
+CREATE INDEX IF NOT EXISTS idx_group_members_registration ON tournament_group_members(registration_id);
 CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(room_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, created_at DESC) WHERE read_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_rating_user_season ON rating_events(user_id, season, created_at DESC);
@@ -570,6 +649,75 @@ CREATE TRIGGER matches_advance_winner
 AFTER UPDATE OF status, winner_registration_id ON matches
 FOR EACH ROW EXECUTE FUNCTION advance_match_winner();
 
+CREATE OR REPLACE FUNCTION advance_match_loser()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_loser uuid;
+BEGIN
+  IF NEW.status = 'completed'
+     AND NEW.winner_registration_id IS NOT NULL
+     AND NEW.loser_next_match_id IS NOT NULL
+     AND (
+       OLD.status IS DISTINCT FROM NEW.status
+       OR OLD.winner_registration_id IS DISTINCT FROM NEW.winner_registration_id
+     )
+  THEN
+    v_loser := CASE
+      WHEN NEW.winner_registration_id = NEW.participant_one_registration_id THEN NEW.participant_two_registration_id
+      ELSE NEW.participant_one_registration_id
+    END;
+    IF NEW.loser_next_match_slot = 1 THEN
+      UPDATE matches SET participant_one_registration_id = v_loser WHERE id = NEW.loser_next_match_id;
+    ELSIF NEW.loser_next_match_slot = 2 THEN
+      UPDATE matches SET participant_two_registration_id = v_loser WHERE id = NEW.loser_next_match_id;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS matches_advance_loser ON matches;
+CREATE TRIGGER matches_advance_loser
+AFTER UPDATE OF status, winner_registration_id ON matches
+FOR EACH ROW EXECUTE FUNCTION advance_match_loser();
+
+CREATE OR REPLACE FUNCTION award_prize_places()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_loser uuid;
+  v_winner_place integer;
+  v_loser_place integer;
+BEGIN
+  IF NEW.status <> 'completed' OR NEW.winner_registration_id IS NULL THEN RETURN NEW; END IF;
+  IF NEW.match_code = 'PO-FINAL' THEN v_winner_place := 1; v_loser_place := 2;
+  ELSIF NEW.match_code = 'PO-BRONZE' THEN v_winner_place := 3; v_loser_place := 4;
+  ELSIF NEW.match_code = 'PO-FIFTH' THEN v_winner_place := 5; v_loser_place := 6;
+  ELSE RETURN NEW;
+  END IF;
+
+  v_loser := CASE
+    WHEN NEW.winner_registration_id = NEW.participant_one_registration_id THEN NEW.participant_two_registration_id
+    ELSE NEW.participant_one_registration_id
+  END;
+  INSERT INTO tournament_placements (tournament_id, place, registration_id, source_match_id)
+  VALUES (NEW.tournament_id, v_winner_place, NEW.winner_registration_id, NEW.id)
+  ON CONFLICT (tournament_id, place) DO UPDATE SET registration_id = excluded.registration_id, source_match_id = excluded.source_match_id, awarded_at = now();
+  INSERT INTO tournament_placements (tournament_id, place, registration_id, source_match_id)
+  VALUES (NEW.tournament_id, v_loser_place, v_loser, NEW.id)
+  ON CONFLICT (tournament_id, place) DO UPDATE SET registration_id = excluded.registration_id, source_match_id = excluded.source_match_id, awarded_at = now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS matches_award_places ON matches;
+CREATE TRIGGER matches_award_places
+AFTER UPDATE OF status, winner_registration_id ON matches
+FOR EACH ROW EXECUTE FUNCTION award_prize_places();
+
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_wallets ENABLE ROW LEVEL SECURITY;
@@ -577,10 +725,14 @@ ALTER TABLE teams ENABLE ROW LEVEL SECURITY;
 ALTER TABLE team_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tournaments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tournament_registrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tournament_stages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tournament_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tournament_group_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tournament_stage_advancements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tournament_placements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE promo_codes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE promo_redemptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
 
 COMMIT;
-

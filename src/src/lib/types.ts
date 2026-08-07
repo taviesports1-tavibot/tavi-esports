@@ -13,6 +13,7 @@ export type Tournament = {
   registered: number;
   status: TournamentStatus;
   accent: "violet" | "cyan" | "pink";
+  largeFormat?: boolean;
 };
 
 export type Player = {
@@ -35,4 +36,3 @@ export type NewsItem = {
   category: string;
   readTime: string;
 };
-

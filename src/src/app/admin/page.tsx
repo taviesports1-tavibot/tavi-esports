@@ -16,6 +16,7 @@ import Link from "next/link";
 import { AdminPromoForm } from "@/components/admin-promo-form";
 import { Eyebrow } from "@/components/ui";
 import { getSession, isAdmin } from "@/lib/auth";
+import { db, hasDatabase } from "@/lib/db";
 
 export const metadata: Metadata = { title: "Адмін-панель" };
 
@@ -48,6 +49,9 @@ export default async function AdminPage() {
       </section>
     );
   }
+  const managedTournaments = hasDatabase()
+    ? await db()`SELECT id, title, status FROM tournaments WHERE team_size = 5 ORDER BY starts_at DESC LIMIT 8`
+    : [{ id: "t4", title: "TaVi Major 5×5", status: "demo" }];
 
   return (
     <section className="admin-page">
@@ -102,6 +106,10 @@ export default async function AdminPage() {
             </ul>
           </article>
         </div>
+        <article className="surface admin-tournament-links">
+          <div className="admin-card-head"><div><small>TOURNAMENT CONTROL</small><h2>Великі турніри 5×5</h2></div><Swords /></div>
+          {managedTournaments.map((tournament) => <Link href={`/admin/tournaments/${tournament.id}`} key={String(tournament.id)}><span>{String(tournament.title)}</span><small>{String(tournament.status)}</small>→</Link>)}
+        </article>
       </div>
     </section>
   );
@@ -117,4 +125,3 @@ function AdminStat({ icon, label, value, trend }: { icon: React.ReactNode; label
     </div>
   );
 }
-
