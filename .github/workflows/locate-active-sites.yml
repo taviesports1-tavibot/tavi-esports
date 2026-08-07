@@ -61,7 +61,8 @@ jobs:
 
           (async () => {
             const tree = await (await request(`${api}/v6/deployments/${deploymentId}/files`)).json();
-            const files = flatten(tree).filter((file) => /\.(?:js|mjs|cjs|json)$/i.test(file.relativePath)).slice(0, 7);
+            const files = flatten(tree);
+            if (files.length !== 7) throw new Error(`Expected exactly 7 deployment files, got ${files.length}`);
             let origin = null;
             for (const file of files) {
               const text = await fileText(file);
