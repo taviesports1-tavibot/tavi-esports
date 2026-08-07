@@ -1,163 +1,33 @@
-name: Recover TaVi Esports source from Vercel
+name: Emergency rollback TaVi Esports production
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: recover-tavi-source
+  group: emergency-tavi-rollback
   cancel-in-progress: false
 
 jobs:
-  recover:
+  rollback:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-      DEPLOYMENT_ID: dpl_AeSpcawkAsevneW6Yt5t9c8tPCCf
+      VERCEL_PROJECT_ID: prj_BXNf82brdN8FK14GdsTb8AXIHAzg
+      VERCEL_TEAM_ID: team_cuSrhEI7TKd7G2EhByPHohqI
+      ROLLBACK_DEPLOYMENT_ID: dpl_3JLgLDAgwWHFKdWw2cSCvDkGWQEf
     steps:
-      - name: Check out main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Restore deployment source files without deleting repository files
+      - name: Point production back to the last working deployment
         shell: bash
         run: |
+          set -euo pipefail
           test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN secret is missing"; exit 1; }
-          node <<'NODE'
-          const fs = require("fs");
-          const path = require("path");
-
-          const token = process.env.VERCEL_TOKEN;
-          const deploymentId = process.env.DEPLOYMENT_ID;
-          const api = "https://api.vercel.com";
-
-          async function requestJson(url) {
-            for (let attempt = 1; attempt <= 4; attempt++) {
-              const response = await fetch(url, {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              if (response.ok) return response.json();
-              const body = await response.text();
-              if (attempt === 4 || ![429, 500, 502, 503, 504].includes(response.status)) {
-                throw new Error(`${response.status} ${response.statusText}: ${body.slice(0, 500)}`);
-              }
-              await new Promise(resolve => setTimeout(resolve, attempt * 1500));
-            }
-          }
-
-          function flatten(entries, parent = "") {
-            const files = [];
-            for (const entry of entries) {
-              const relativePath = parent ? `${parent}/${entry.name}` : entry.name;
-              if (entry.type === "directory") {
-                files.push(...flatten(entry.children || [], relativePath));
-              } else if (entry.type === "file" && entry.uid) {
-                files.push({ relativePath, uid: entry.uid, mode: entry.mode });
-              }
-            }
-            return files;
-          }
-
-          function safePath(relativePath) {
-            if (!relativePath || relativePath.includes("\0") || path.isAbsolute(relativePath)) return false;
-            const normalized = path.posix.normalize(relativePath);
-            return normalized !== ".." && !normalized.startsWith("../") && !normalized.startsWith(".git/");
-          }
-
-          (async () => {
-            const tree = await requestJson(`${api}/v6/deployments/${deploymentId}/files`);
-            const files = flatten(tree);
-            if (files.length < 20) {
-              throw new Error(`Expected a full source deployment, but API returned only ${files.length} files`);
-            }
-
-            let restored = 0;
-            let preserved = 0;
-            for (const file of files) {
-              if (!safePath(file.relativePath)) {
-                throw new Error(`Unsafe deployment path: ${file.relativePath}`);
-              }
-
-              if (file.relativePath === ".github/workflows/recover-vercel-source.yml" || fs.existsSync(file.relativePath)) {
-                console.log(`Preserved existing repository file: ${file.relativePath}`);
-                preserved++;
-                continue;
-              }
-
-              const url = `${api}/v8/deployments/${deploymentId}/files/${encodeURIComponent(file.uid)}?path=${encodeURIComponent(file.relativePath)}`;
-              const payload = await requestJson(url);
-              let fileBuffer;
-              if (payload && typeof payload.content === "string") {
-                fileBuffer = Buffer.from(payload.content, "base64");
-              } else if (payload && typeof payload.data === "string") {
-                fileBuffer = Buffer.from(payload.data, "base64");
-              } else if (
-                payload &&
-                payload.content &&
-                payload.content.type === "Buffer" &&
-                Array.isArray(payload.content.data)
-              ) {
-                fileBuffer = Buffer.from(payload.content.data);
-              } else if (
-                payload &&
-                payload.data &&
-                payload.data.type === "Buffer" &&
-                Array.isArray(payload.data.data)
-              ) {
-                fileBuffer = Buffer.from(payload.data.data);
-              } else {
-                const shape = {
-                  topLevelKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
-                  contentType: typeof payload?.content,
-                  contentKeys:
-                    payload?.content && typeof payload.content === "object"
-                      ? Object.keys(payload.content)
-                      : []
-                };
-                throw new Error(
-                  `Unsupported deployment file response for ${file.relativePath}: ${JSON.stringify(shape)}`
-                );
-              }
-
-              fs.mkdirSync(path.dirname(file.relativePath), { recursive: true });
-              fs.writeFileSync(file.relativePath, fileBuffer);
-              if (file.mode && (file.mode & 0o111)) fs.chmodSync(file.relativePath, 0o755);
-              console.log(`Restored: ${file.relativePath}`);
-              restored++;
-            }
-
-            fs.writeFileSync(
-              ".vercel-source-recovery.json",
-              JSON.stringify({
-                deploymentId,
-                recoveredAt: new Date().toISOString(),
-                deploymentFileCount: files.length,
-                restoredFileCount: restored,
-                preservedExistingFileCount: preserved
-              }, null, 2) + "\n"
-            );
-            console.log(`Recovered ${restored} files; preserved ${preserved} existing files; deployment contained ${files.length} files.`);
-          })().catch(error => {
-            console.error(error);
-            process.exit(1);
-          });
-          NODE
-
-      - name: Commit recovered source to main
-        shell: bash
-        run: |
-          git config user.name "TaVi Source Recovery"
-          git config user.email "actions@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No source changes were recovered."
-            exit 0
-          fi
-          git commit -m "Restore complete TaVi Esports source from Vercel [skip ci]"
-          git push origin HEAD:main
-          echo "Recovered source commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.vercel.com/v1/projects/$VERCEL_PROJECT_ID/rollback/$ROLLBACK_DEPLOYMENT_ID?teamId=$VERCEL_TEAM_ID&description=Emergency%20rollback%20to%20last%20working%20TaVi%20Esports%20deployment"
+          echo "Rolled production back to $ROLLBACK_DEPLOYMENT_ID" >> "$GITHUB_STEP_SUMMARY"
