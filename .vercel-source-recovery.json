@@ -1,7 +1,7 @@
 {
   "deploymentId": "dpl_AeSpcawkAsevneW6Yt5t9c8tPCCf",
-  "recoveredAt": "2026-08-07T02:42:20.111Z",
+  "recoveredAt": "2026-08-07T02:42:33.715Z",
   "deploymentFileCount": 67,
-  "restoredFileCount": 67,
-  "preservedExistingFileCount": 0
+  "restoredFileCount": 0,
+  "preservedExistingFileCount": 67
 }
