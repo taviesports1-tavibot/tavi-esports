@@ -1,9 +1,9 @@
 name: Locate active Sites origin
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/inspect-working-wrapper
+      - main
     paths:
       - .github/workflows/locate-active-sites.yml
 
