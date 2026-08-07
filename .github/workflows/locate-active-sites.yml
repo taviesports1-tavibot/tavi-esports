@@ -1,0 +1,83 @@
+name: Locate active Sites origin
+
+on:
+  push:
+    branches:
+      - agent/inspect-working-wrapper
+    paths:
+      - .github/workflows/locate-active-sites.yml
+
+permissions:
+  contents: write
+
+jobs:
+  locate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      DEPLOYMENT_ID: dpl_3JLgLDAgwWHFKdWw2cSCvDkGWQEf
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/inspect-working-wrapper
+          fetch-depth: 0
+
+      - name: Locate public Sites address
+        shell: bash
+        run: |
+          test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN is missing"; exit 1; }
+          node <<'NODE'
+          const fs = require("fs");
+          const token = process.env.VERCEL_TOKEN;
+          const deploymentId = process.env.DEPLOYMENT_ID;
+          const api = "https://api.vercel.com";
+
+          async function request(url) {
+            const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+            if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+            return response;
+          }
+
+          function flatten(entries, parent = "") {
+            return entries.flatMap((entry) => {
+              const relativePath = parent ? `${parent}/${entry.name}` : entry.name;
+              if (entry.type === "directory") return flatten(entry.children || [], relativePath);
+              return entry.type === "file" && entry.uid ? [{ relativePath, uid: entry.uid }] : [];
+            });
+          }
+
+          async function fileText(file) {
+            const response = await request(`${api}/v8/deployments/${deploymentId}/files/${encodeURIComponent(file.uid)}?path=${encodeURIComponent(file.relativePath)}`);
+            const raw = await response.text();
+            let payload;
+            try { payload = JSON.parse(raw); } catch { return raw; }
+            if (typeof payload?.content === "string") return Buffer.from(payload.content, "base64").toString("utf8");
+            if (typeof payload?.data === "string") return Buffer.from(payload.data, "base64").toString("utf8");
+            if (payload?.content?.type === "Buffer") return Buffer.from(payload.content.data).toString("utf8");
+            if (payload?.data?.type === "Buffer") return Buffer.from(payload.data.data).toString("utf8");
+            return raw;
+          }
+
+          (async () => {
+            const tree = await (await request(`${api}/v6/deployments/${deploymentId}/files`)).json();
+            const files = flatten(tree).filter((file) => /\.(?:js|mjs|cjs|json)$/i.test(file.relativePath)).slice(0, 7);
+            let origin = null;
+            for (const file of files) {
+              const text = await fileText(file);
+              const match = text.match(/https:\/\/([a-z0-9.-]+\.chatgpt\.site)/i);
+              if (match) { origin = match[1].toLowerCase(); break; }
+            }
+            if (!origin) throw new Error("Public Sites origin was not found in the 7 deployment files");
+            fs.writeFileSync("working-site-origin.txt", origin + "\n");
+          })().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+
+      - name: Return only the public address
+        shell: bash
+        run: |
+          git config user.name "TaVi Safe Locator"
+          git config user.email "actions@users.noreply.github.com"
+          git add working-site-origin.txt
+          git commit -m "Record active Sites address [skip ci]"
+          git push origin HEAD:agent/inspect-working-wrapper
