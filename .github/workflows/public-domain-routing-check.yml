@@ -1,0 +1,55 @@
+name: Public domain routing check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/public-domain-routing-check.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve public DNS and redirects
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import socket
+          import subprocess
+
+          def dig(record, name):
+              output = subprocess.check_output(["dig", "+short", record, name], text=True).splitlines()
+              return [line.strip().rstrip(".") for line in output if line.strip()]
+
+          result = {
+              "apex_a": dig("A", "tavi-esports.com"),
+              "apex_cname": dig("CNAME", "tavi-esports.com"),
+              "www_a": dig("A", "www.tavi-esports.com"),
+              "www_cname": dig("CNAME", "www.tavi-esports.com"),
+          }
+          print("PUBLIC_ROUTING_RESULT=" + json.dumps(result, separators=(",", ":"), sort_keys=True))
+          PY
+
+      - name: Remove temporary PR and branch
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          curl --fail --silent --show-error -o /dev/null -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER" -d '{"state":"closed"}'
+          encoded_ref=$(python -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["HEAD_REF"], safe=""))')
+          curl --fail --silent --show-error -o /dev/null -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/git/refs/heads/$encoded_ref"
