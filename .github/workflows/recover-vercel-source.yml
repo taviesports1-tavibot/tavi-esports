@@ -104,12 +104,32 @@ jobs:
 
               const url = `${api}/v8/deployments/${deploymentId}/files/${encodeURIComponent(file.uid)}?path=${encodeURIComponent(file.relativePath)}`;
               const payload = await requestJson(url);
-              if (!payload || typeof payload.content !== "string") {
-                throw new Error(`No base64 content returned for ${file.relativePath}`);
+              let fileBuffer;
+              if (payload && typeof payload.content === "string") {
+                fileBuffer = Buffer.from(payload.content, "base64");
+              } else if (
+                payload &&
+                payload.content &&
+                payload.content.type === "Buffer" &&
+                Array.isArray(payload.content.data)
+              ) {
+                fileBuffer = Buffer.from(payload.content.data);
+              } else {
+                const shape = {
+                  topLevelKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
+                  contentType: typeof payload?.content,
+                  contentKeys:
+                    payload?.content && typeof payload.content === "object"
+                      ? Object.keys(payload.content)
+                      : []
+                };
+                throw new Error(
+                  `Unsupported deployment file response for ${file.relativePath}: ${JSON.stringify(shape)}`
+                );
               }
 
               fs.mkdirSync(path.dirname(file.relativePath), { recursive: true });
-              fs.writeFileSync(file.relativePath, Buffer.from(payload.content, "base64"));
+              fs.writeFileSync(file.relativePath, fileBuffer);
               if (file.mode && (file.mode & 0o111)) fs.chmodSync(file.relativePath, 0o755);
               console.log(`Restored: ${file.relativePath}`);
               restored++;
