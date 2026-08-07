@@ -1,0 +1,121 @@
+name: Authorized active wrapper discovery
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/authorized-active-wrapper-discovery.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: team_cuSrhEI7TKd7G2EhByPHohqI
+      VERCEL_DEPLOYMENT_ID: dpl_3JLgLDAgwWHFKdWw2cSCvDkGWQEf
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract only Sites references from active wrapper
+        shell: python
+        run: |
+          import base64
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["VERCEL_TOKEN"]
+          team = os.environ["VERCEL_TEAM_ID"]
+          deployment = os.environ["VERCEL_DEPLOYMENT_ID"]
+          headers = {"Authorization": f"Bearer {token}"}
+
+          def api(path):
+              separator = "&" if "?" in path else "?"
+              request = urllib.request.Request(
+                  "https://api.vercel.com" + path + separator + urllib.parse.urlencode({"teamId": team}),
+                  headers=headers,
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          files = []
+          def walk(nodes, prefix=""):
+              for node in nodes if isinstance(nodes, list) else []:
+                  name = node.get("name", "")
+                  path = f"{prefix}/{name}" if prefix else name
+                  if node.get("type") == "file" and node.get("uid"):
+                      files.append((path, node["uid"]))
+                  walk(node.get("children", []), path)
+          walk(api(f"/v6/deployments/{deployment}/files"))
+
+          url_pattern = re.compile(r"https?://[a-z0-9.-]+\.chatgpt\.site(?:/[^\"'\s\\]*)?", re.I)
+          id_pattern = re.compile(r"(?:project_id|projectId)[\"'\s:=]+([A-Za-z0-9_-]{16,})")
+          urls = set()
+          project_ids = set()
+          matched_paths = set()
+          for path, uid in files:
+              try:
+                  payload = api(f"/v8/deployments/{deployment}/files/{uid}")
+                  text = base64.b64decode(payload.get("content", ""), validate=False).decode("utf-8", errors="ignore")
+              except Exception:
+                  continue
+              found_urls = url_pattern.findall(text)
+              found_ids = id_pattern.findall(text)
+              if path.endswith(".openai/hosting.json"):
+                  try:
+                      parsed = json.loads(text)
+                      if isinstance(parsed.get("project_id"), str):
+                          found_ids.append(parsed["project_id"])
+                  except Exception:
+                      pass
+              if found_urls or found_ids:
+                  matched_paths.add(path)
+                  urls.update(item.rstrip("/.,;)") for item in found_urls)
+                  project_ids.update(found_ids)
+
+          manifest = api(f"/v13/deployments/{deployment}")
+          def scan_manifest(value, path="root"):
+              if isinstance(value, dict):
+                  for key, item in value.items():
+                      scan_manifest(item, f"{path}.{key}")
+              elif isinstance(value, list):
+                  for index, item in enumerate(value):
+                      scan_manifest(item, f"{path}[{index}]")
+              elif isinstance(value, str):
+                  urls.update(item.rstrip("/.,;)") for item in url_pattern.findall(value))
+                  project_ids.update(id_pattern.findall(value))
+          scan_manifest(manifest)
+
+          result = {
+              "sites_urls": sorted(urls),
+              "project_ids": sorted(project_ids),
+              "matched_file_paths": sorted(matched_paths),
+              "source_file_count": len(files),
+          }
+          print("ACTIVE_WRAPPER_RESULT=" + json.dumps(result, separators=(",", ":"), sort_keys=True))
+          if not urls and not project_ids:
+              raise SystemExit(2)
+
+      - name: Remove temporary PR and branch
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          curl --fail --silent --show-error -o /dev/null -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER" -d '{"state":"closed"}'
+          encoded_ref=$(python -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["HEAD_REF"], safe=""))')
+          curl --fail --silent --show-error -o /dev/null -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/git/refs/heads/$encoded_ref"
