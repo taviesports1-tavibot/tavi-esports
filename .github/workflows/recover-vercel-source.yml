@@ -107,6 +107,8 @@ jobs:
               let fileBuffer;
               if (payload && typeof payload.content === "string") {
                 fileBuffer = Buffer.from(payload.content, "base64");
+              } else if (payload && typeof payload.data === "string") {
+                fileBuffer = Buffer.from(payload.data, "base64");
               } else if (
                 payload &&
                 payload.content &&
@@ -114,6 +116,13 @@ jobs:
                 Array.isArray(payload.content.data)
               ) {
                 fileBuffer = Buffer.from(payload.content.data);
+              } else if (
+                payload &&
+                payload.data &&
+                payload.data.type === "Buffer" &&
+                Array.isArray(payload.data.data)
+              ) {
+                fileBuffer = Buffer.from(payload.data.data);
               } else {
                 const shape = {
                   topLevelKeys: payload && typeof payload === "object" ? Object.keys(payload) : [],
