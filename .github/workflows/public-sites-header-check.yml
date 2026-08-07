@@ -1,0 +1,63 @@
+name: Public Sites header check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/public-sites-header-check.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read public Sites response metadata only
+        shell: python
+        run: |
+          import json
+          import re
+          import urllib.request
+
+          url = "https://tavi-esports-platform.cf869j27t2.chatgpt.site/"
+          request = urllib.request.Request(url, headers={"User-Agent": "TaVi-public-diagnostic/1.0"})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              body = response.read().decode("utf-8", errors="ignore")
+              headers = dict(response.headers.items())
+
+          safe_headers = {}
+          for key, value in headers.items():
+              lower = key.lower()
+              if lower.startswith("x-") and not any(word in lower for word in ("auth", "token", "cookie", "secret")):
+                  safe_headers[lower] = value
+
+          project_ids = sorted(set(re.findall(r"(?:project_id|projectId)[\"'\s:=]+([A-Za-z0-9_-]{16,})", body)))
+          deployment_versions = sorted(set(re.findall(r"deploymentVersion\\?\"?[:=]\\?\"([0-9a-f-]{20,})", body, re.I)))
+          result = {
+              "safe_x_headers": safe_headers,
+              "project_ids": project_ids,
+              "deployment_versions": deployment_versions,
+              "final_url": url,
+          }
+          print("PUBLIC_SITES_METADATA=" + json.dumps(result, separators=(",", ":"), sort_keys=True))
+
+      - name: Remove temporary PR and branch
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          curl --fail --silent --show-error -o /dev/null -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER" -d '{"state":"closed"}'
+          encoded_ref=$(python -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["HEAD_REF"], safe=""))')
+          curl --fail --silent --show-error -o /dev/null -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/git/refs/heads/$encoded_ref"
