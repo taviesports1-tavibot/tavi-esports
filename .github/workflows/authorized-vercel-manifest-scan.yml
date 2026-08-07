@@ -1,0 +1,90 @@
+name: Authorized Vercel deployment manifest scan
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/authorized-vercel-manifest-scan.yml
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TEAM_ID: team_cuSrhEI7TKd7G2EhByPHohqI
+      VERCEL_DEPLOYMENT_ID: dpl_9ALTp7wnBoBneNMuN2ZTmscLV4f6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract only Sites references from deployment manifest
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          token = os.environ["VERCEL_TOKEN"]
+          team = os.environ["VERCEL_TEAM_ID"]
+          deployment = os.environ["VERCEL_DEPLOYMENT_ID"]
+          params = urllib.parse.urlencode({"teamId": team})
+          request = urllib.request.Request(
+              f"https://api.vercel.com/v13/deployments/{deployment}?{params}",
+              headers={"Authorization": f"Bearer {token}"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              payload = json.load(response)
+
+          url_pattern = re.compile(r"https?://[a-z0-9.-]+\.chatgpt\.site(?:/[^\"'\s\\]*)?", re.I)
+          id_pattern = re.compile(r"(?:project_id|projectId)[\"'\s:=]+([A-Za-z0-9_-]{16,})")
+          urls = set()
+          project_ids = set()
+          matched_paths = set()
+
+          def walk(value, path="root"):
+              if isinstance(value, dict):
+                  for key, item in value.items():
+                      walk(item, f"{path}.{key}")
+              elif isinstance(value, list):
+                  for index, item in enumerate(value):
+                      walk(item, f"{path}[{index}]")
+              elif isinstance(value, str):
+                  found_urls = url_pattern.findall(value)
+                  found_ids = id_pattern.findall(value)
+                  if found_urls or found_ids:
+                      matched_paths.add(path)
+                      urls.update(item.rstrip("/.,;)") for item in found_urls)
+                      project_ids.update(found_ids)
+
+          walk(payload)
+          result = {
+              "sites_urls": sorted(urls),
+              "project_ids": sorted(project_ids),
+              "matched_manifest_paths": sorted(matched_paths),
+          }
+          print("SANITIZED_MANIFEST_RESULT=" + json.dumps(result, separators=(",", ":"), sort_keys=True))
+          if not urls and not project_ids:
+              raise SystemExit(2)
+
+      - name: Remove temporary PR and branch
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          curl --fail --silent --show-error -o /dev/null -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER" -d '{"state":"closed"}'
+          encoded_ref=$(python -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["HEAD_REF"], safe=""))')
+          curl --fail --silent --show-error -o /dev/null -X DELETE \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPOSITORY/git/refs/heads/$encoded_ref"
