@@ -3602,6 +3602,12 @@ a.ranking-row:hover {
   grid-template-columns: 1fr 340px;
 }
 
+.captain-team-flow {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
 .support-form,
 .team-form,
 .team-form-note {
@@ -3631,6 +3637,7 @@ a.ranking-row:hover {
 .support-form textarea,
 .team-form input,
 .team-form select,
+.team-form textarea,
 .roster-list input,
 .roster-list select {
   width: 100%;
@@ -3640,6 +3647,10 @@ a.ranking-row:hover {
   outline: 0;
   background: rgba(255, 255, 255, 0.025);
   color: #fff;
+}
+
+.team-form textarea {
+  resize: vertical;
 }
 
 .support-form option,
@@ -3717,7 +3728,27 @@ a.ranking-row:hover {
 }
 
 .form-title > svg {
+  flex: 0 0 auto;
   color: var(--violet-2);
+}
+
+.form-title > div {
+  min-width: 0;
+}
+
+.flow-step {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--violet-2);
+  font-family: "Courier New", monospace;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.editor-cancel {
+  align-self: flex-start;
 }
 
 .form-row {
@@ -3731,16 +3762,185 @@ a.ranking-row:hover {
   gap: 8px;
 }
 
-.roster-list > div {
+.roster-list > .roster-player {
   display: grid;
   align-items: center;
   gap: 8px;
-  grid-template-columns: 90px 1fr 1fr 0.7fr;
+  grid-template-columns: 82px minmax(120px, 1fr) minmax(205px, 1.2fr) minmax(130px, 0.7fr) 38px;
 }
 
 .roster-list strong {
   color: var(--muted);
   font-size: 10px;
+}
+
+.roster-heading,
+.roster-heading > div,
+.roster-heading > div > span {
+  display: flex;
+}
+
+.roster-heading {
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 6px;
+}
+
+.roster-heading > div {
+  align-items: center;
+  gap: 10px;
+}
+
+.roster-heading svg {
+  color: var(--violet-2);
+}
+
+.roster-heading > div > span {
+  flex-direction: column;
+  gap: 3px;
+}
+
+.roster-heading strong {
+  font-size: 13px;
+}
+
+.roster-heading small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.roster-heading > b {
+  padding: 5px 8px;
+  border: 1px solid var(--line-bright);
+  border-radius: 7px;
+  color: var(--violet-2);
+  font-size: 10px;
+}
+
+.mlbb-fields {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 1.35fr 0.65fr;
+}
+
+.roster-remove {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(255, 83, 109, 0.24);
+  border-radius: 8px;
+  background: rgba(255, 83, 109, 0.06);
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.tournament-team-form {
+  border-color: rgba(169, 60, 255, 0.24);
+}
+
+.selected-tournament-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid var(--line-bright);
+  border-radius: 10px;
+  background: rgba(169, 60, 255, 0.06);
+}
+
+.selected-tournament-box small {
+  color: var(--violet-2);
+  font-family: "Courier New", monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.selected-tournament-box strong {
+  font-size: 15px;
+}
+
+.selected-roster {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.selected-roster > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 11px;
+}
+
+.selected-roster > div span {
+  margin-left: auto;
+  color: var(--violet-2);
+}
+
+.selected-roster > div button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #d9a3f3;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.selected-roster ul {
+  display: grid;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.selected-roster li {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--line);
+  grid-template-columns: 1fr 0.7fr auto;
+  font-size: 10px;
+}
+
+.selected-roster li:last-child {
+  border-bottom: 0;
+}
+
+.selected-roster li span {
+  color: #cdbbd7;
+}
+
+.selected-roster li small {
+  color: var(--muted);
+}
+
+.roster-missing {
+  padding: 16px;
+}
+
+.form-empty-note {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  border: 1px dashed var(--line-bright);
+  border-radius: 10px;
+  background: rgba(169, 60, 255, 0.035);
+}
+
+.form-empty-note > svg {
+  flex: 0 0 auto;
+  color: var(--violet-2);
+}
+
+.form-empty-note strong {
+  font-size: 12px;
 }
 
 .team-form-note {
@@ -4087,10 +4287,22 @@ a.ranking-row:hover {
     grid-template-columns: 1fr;
   }
 
-  .roster-list > div {
+  .roster-list > .roster-player {
     padding-bottom: 16px;
     border-bottom: 1px solid var(--line);
     grid-template-columns: 1fr;
+  }
+
+  .roster-remove {
+    width: 100%;
+  }
+
+  .selected-roster li {
+    grid-template-columns: 1fr auto;
+  }
+
+  .selected-roster li small {
+    grid-column: 1 / -1;
   }
 
   .chat-shell {

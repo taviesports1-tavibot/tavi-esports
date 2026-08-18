@@ -32,18 +32,35 @@ export const promoRedeemSchema = z.object({
 
 export const rosterPlayerSchema = z.object({
   nickname: z.string().trim().min(2, "Вкажіть нікнейм").max(32),
-  mlbbId: z.string().trim().min(3, "Вкажіть MLBB ID").max(40),
+  mlbbId: z.string().trim().min(3, "Вкажіть MLBB ID").max(24).regex(/^\d+$/, "MLBB ID має містити лише цифри"),
+  mlbbServer: z.string().trim().min(2, "Вкажіть сервер").max(12).regex(/^\d+$/, "Сервер має містити лише цифри"),
   role: z.enum(["Jungle", "Mid Lane", "Gold Lane", "EXP Lane", "Roam", "Substitute"])
 });
 
-export const tournamentRegistrationSchema = z.object({
-  teamName: z.string().trim().min(3).max(40),
-  tag: z.string().trim().min(2).max(6).regex(/^[\p{L}\p{N}_-]+$/u),
-  captainTelegram: z.string().trim().regex(/^@[A-Za-z0-9_]{5,32}$/, "Вкажіть Telegram у форматі @username"),
-  roster: z.array(rosterPlayerSchema).min(5).max(7).refine(
-    (players) => new Set(players.map((player) => player.mlbbId.toLowerCase())).size === players.length,
-    "MLBB ID у складі не повинні повторюватися"
+const rosterSchema = z.array(rosterPlayerSchema).min(5).max(7)
+  .refine(
+    (players) => new Set(players.map((player) => `${player.mlbbId}:${player.mlbbServer}`)).size === players.length,
+    "MLBB ID та сервер у складі не повинні повторюватися"
   )
+  .refine(
+    (players) => players.filter((player) => player.role !== "Substitute").length === 5,
+    "У складі має бути рівно 5 основних гравців"
+  )
+  .refine(
+    (players) => new Set(players.filter((player) => player.role !== "Substitute").map((player) => player.role)).size === 5,
+    "Кожна основна роль має бути вказана один раз"
+  );
+
+export const teamCreateSchema = z.object({
+  name: z.string().trim().min(3, "Назва має містити щонайменше 3 символи").max(40),
+  tag: z.string().trim().min(2).max(6).regex(/^[\p{L}\p{N}_-]+$/u),
+  description: z.string().trim().max(500).optional().default(""),
+  captainTelegram: z.string().trim().regex(/^@[A-Za-z0-9_]{5,32}$/, "Вкажіть Telegram у форматі @username"),
+  roster: rosterSchema
+});
+
+export const tournamentRegistrationSchema = z.object({
+  teamId: z.uuid("Оберіть команду")
 });
 
 export const registrationReviewSchema = z.object({

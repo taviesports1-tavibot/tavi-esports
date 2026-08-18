@@ -106,6 +106,27 @@ CREATE TABLE IF NOT EXISTS team_members (
   PRIMARY KEY (team_id, user_id)
 );
 
+-- A captain can register the real MLBB roster even when some players do not
+-- have TaVi accounts yet. Linked TaVi accounts continue to live in
+-- team_members; this table is the authoritative tournament roster.
+CREATE TABLE IF NOT EXISTS team_roster_members (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  team_id uuid NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+  nickname citext NOT NULL,
+  mlbb_id text NOT NULL,
+  mlbb_server text NOT NULL,
+  game_role text NOT NULL
+    CHECK (game_role IN ('Jungle', 'Mid Lane', 'Gold Lane', 'EXP Lane', 'Roam', 'Substitute')),
+  roster_role text NOT NULL DEFAULT 'starter'
+    CHECK (roster_role IN ('starter', 'substitute')),
+  sort_order smallint NOT NULL CHECK (sort_order BETWEEN 1 AND 7),
+  created_by uuid NOT NULL REFERENCES users(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (team_id, mlbb_id, mlbb_server),
+  UNIQUE (team_id, sort_order)
+);
+
 CREATE TABLE IF NOT EXISTS tournaments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug text NOT NULL UNIQUE,
@@ -723,6 +744,7 @@ ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_wallets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teams ENABLE ROW LEVEL SECURITY;
 ALTER TABLE team_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE team_roster_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tournaments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tournament_registrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tournament_stages ENABLE ROW LEVEL SECURITY;
