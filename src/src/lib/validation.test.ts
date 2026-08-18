@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { promoCreateSchema, registerSchema, tournamentRegistrationSchema } from "./validation";
+import { promoCreateSchema, registerSchema, teamCreateSchema, tournamentRegistrationSchema } from "./validation";
 
 describe("registerSchema", () => {
   it("normalizes email and accepts a strong password", () => {
@@ -22,20 +22,32 @@ describe("registerSchema", () => {
   });
 });
 
-describe("tournamentRegistrationSchema", () => {
+describe("teamCreateSchema", () => {
   const roster = Array.from({ length: 5 }, (_, index) => ({
     nickname: `Player ${index + 1}`,
     mlbbId: `1000${index}`,
+    mlbbServer: `200${index}`,
     role: ["Jungle", "Mid Lane", "Gold Lane", "EXP Lane", "Roam"][index]
   }));
 
   it("accepts a complete unique 5-player roster", () => {
-    expect(tournamentRegistrationSchema.parse({ teamName: "TaVi Academy", tag: "TAVI", captainTelegram: "@bazuka_ml", roster }).roster).toHaveLength(5);
+    expect(teamCreateSchema.parse({ name: "TaVi Academy", tag: "TAVI", captainTelegram: "@bazuka_ml", roster }).roster).toHaveLength(5);
   });
 
-  it("rejects duplicate MLBB IDs", () => {
-    const duplicate = roster.map((player) => ({ ...player, mlbbId: "same-id" }));
-    expect(() => tournamentRegistrationSchema.parse({ teamName: "TaVi Academy", tag: "TAVI", captainTelegram: "@bazuka_ml", roster: duplicate })).toThrow();
+  it("rejects duplicate MLBB ID and server pairs", () => {
+    const duplicate = roster.map((player) => ({ ...player, mlbbId: "10001", mlbbServer: "2001" }));
+    expect(() => teamCreateSchema.parse({ name: "TaVi Academy", tag: "TAVI", captainTelegram: "@bazuka_ml", roster: duplicate })).toThrow();
+  });
+
+  it("rejects a roster without all five starting roles", () => {
+    const duplicateRole = roster.map((player, index) => ({ ...player, role: index === 4 ? "Jungle" : player.role }));
+    expect(() => teamCreateSchema.parse({ name: "TaVi Academy", tag: "TAVI", captainTelegram: "@bazuka_ml", roster: duplicateRole })).toThrow();
+  });
+});
+
+describe("tournamentRegistrationSchema", () => {
+  it("accepts an existing team id", () => {
+    expect(tournamentRegistrationSchema.parse({ teamId: "550e8400-e29b-41d4-a716-446655440000" }).teamId).toBe("550e8400-e29b-41d4-a716-446655440000");
   });
 });
 
